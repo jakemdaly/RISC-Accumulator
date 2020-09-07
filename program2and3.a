@@ -1,0 +1,217 @@
+// Get some useful constants into the register file
+	CLR
+	LDA 	7'd52 			// load the value 0x0 into load register (R11)
+	LDM 	R0 				// move this 0x0 into R0
+	LDM 	R8 				// move to R8 to be used as the next place we will store
+	LDA 	7'd53 			// load the value 0x1 into load register (R11)
+	LDM 	R1 				// move 0x1 into R1
+	LDA		7'd54			// load the value 0x20 into the load register (R11)
+	LDM 	R2 				// move it into R2, so that it can be used even when R6 is some other ASCII character. 
+	LDA		7'd59 			// load how many times we'll shift each LFSR sequence
+	LDM 	R4 				// R4 will start as this, and we'll decrement downwards until we hit 0, then increment for the message
+	LDA 	7'd58 			// load the constant 200
+	LDM 	R5 				// move the value to R5 temporarily
+	CLR
+	ADD 	R5 				// prepare to increment then store back in memory for next sequence number
+	LDR 	R5 				// load from memory the value contained in address R5
+	LDM 	R5 				// load the first LFSR sequence number
+	ADD 	R1 				// increment the data address to 201
+	ACM 	R12 			// move to Store register
+	STA 	7'd58 			// store this incremented value back in DM58
+	LDA 	7'd64 			// load the LFSR starting state
+	LDM 	R6 				// move this value into R6
+	LDM 	R7 				// store a copy in R7 as well (because we'll be advancing R6)
+	LDA 	7'd55 			// load the constant 64
+	LDM 	R14 			// stack pointer will start at the beginning of the message (DM64)
+	CLR 
+	LDA 	7'd59 			// load the constant 10
+	LDM 	R10 			// move to temporary register R10	
+	ADD 	R14				// calculate final space character address as 64 + 10 -1
+	ADD 	R10				// see above
+	SUB 	R1 				// see above
+	ACM 	R3 				// temporarily store this address in R3
+	LDR 	R3 				// load the value at that address
+	LDM 	R3 				// overwrite old value of R3
+	LDA 	7'd57 			// load the constant 0b1111111 (127)
+	LDM 	R9 				// move to R9
+	CLR
+	CMP 	R0 				// set the Z flag to known state so we can branch
+	BEQ 	FindLFSRSeq 	// branch to FindLFSRSeq
+
+	// Need to compute what the Nth LFSR state is for the selected pattern
+	FindLFSRSeq:
+		CLR
+		ADD 	R6 				// add the initial state that is at DM64 into the accumulator
+		AND 	R9
+		AND 	R5 				// AND with the pattern type
+		RXR 	R10				// redux XOR and store in R10
+		CLR	
+		ADD 	R6 				// ADD R6, left shift will keep the lowest 7 bits
+		LSL 	4'd1			// shift it left by 1
+		ADD 	R10 			// add in the reduction XOR value
+		AND 	R9 				// mask out MSB
+		ACM 	R6 				// update the old LFSR value with the new one
+		CLR
+		ADD 	R4 				// prepare to update number of space characters left
+		SUB 	R1 				// decrement it
+		ACM 	R4 				// update R4
+		CMP 	R1 				// if zero, we can store and branch
+		BNE 	FindLFSRSeq 	// keep looping if we have not looped the same number of times as the number of space characters
+
+		// Once we've counted all the way down, check if this 10th LFSR value is equal to the one stored in memory
+		CLR 	
+		ADD 	R3 				// compare R6 to lower 7 bits of R3
+		AND 	R9 					
+		CMP 	R6
+		BEQ 	PreDecrypt  		// yay we found it!
+
+		// We didn't find it, so we'll have to update and restore some registers to test the next LFSR sequence
+		LDA 	7'd59 			// prepare to reset counter
+		LDM 	R4 				// reset counter
+		LDA 	7'd58 			// load next constant (it's already been incremented)
+		LDM 	R5 				// move the value to R5 temporarily
+		CLR
+		ADD 	R5 				// prepare to increment then store back in memory for next sequence number
+		LDR 	R5 				// load from memory the value contained in address R5
+		LDM 	R5 				// load the first LFSR sequence number
+		ADD 	R1 				// increment the data address
+		ACM 	R12				// move to the store register
+		STA 	7'd58 			// store this incremented value back in DM58
+		CLR 
+		ADD 	R7 				// prepare to reset R6
+		ACM 	R6 				// restore R6 to the initial LFSR starting value
+		CMP 	R7 				// guaruntee branch
+		BEQ 	FindLFSRSeq
+
+
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// !!! NOTE: INSTEAD OF WRITING A SEPARATE PROGRAM 3, WE WILL ACCOMPLISH THE ERROR CORRECTION AND SPACE REMOVAL AS WE GO RIGHT HERE
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	
+	// Need to reset R6 to the original LFSR state first, R7 will be ASCII character register
+	PreDecrypt:
+		CLR 
+		ADD 	R7 				// prepare to restore R6 as initial LFSR state
+		AND 	R9 				// don't need parity bit for first space characters
+		ACM 	R6				// copy R7s value (initial LFSR state) into R6
+		ACM 	R7 				// also don't need parity bit 
+		CMP 	R6 				// guaruntee branch
+		BEQ 	Decrypt 		
+
+	// Now we can decrypt the message, and store the decrypted messages into DM starting at DM0
+	Decrypt:
+		CLR 	
+		ADD 	R1 				// need to compare store pointer to see if it has reached DM64 yet
+		LSL 	4'd6 			// bit[6] = 1 == 64
+		ADD 	R1
+		CMP 	R8 				// is store pointer pointing at address DM64? If so, we're done
+		BEQ 	Done
+
+		// Check to see if we are at 128 (end of message), make rest space characters??
+		CLR 
+		ADD  	R9
+		ADD 	R1
+		CMP 	R14
+		BEQ 	SendSpace
+
+		LDR 	R14 			// stack pointer will start at 64, increment each loop
+		LDM 	R7 				// move to ASCII character register
+		CLR 	
+		ADD 	R14 			// prepare to increment stack pointer
+		ADD 	R1 				// increment
+		ACM 	R14 			// update stack pointer for next read
+		
+		// Now we need to determine what character we are working with
+		CLR
+		ADD 	R7 				// load ASCII character into accumulator
+		RXR 	R13 			// R13 will be parity store. store reduction XOR value for later use
+		AND 	R9 				// we stored parity so it's ok to mask it out
+		//ADD 	R2 				// add back in 0x20
+		XOR 	R6 				// should recover the original 8-bit number
+		ACM 	R3 				// store this value in R3
+
+		// Update LFSR sequence
+		CLR
+		ADD 	R6 				// add the initial state that is at DM64 into the accumulator
+		AND 	R9 				// mask off parity bit
+		AND 	R5 				// AND with the pattern type
+		RXR 	R10				// redux XOR and store in R10
+		CLR	
+		ADD 	R6 				// ADD R6, left shift will keep the lowest 7 bits
+		LSL 	4'd1			// shift it left by 1
+		ADD 	R10 			// add in the reduction XOR value
+		AND 	R9 				// mask out MSB
+		ACM 	R6 				// update the old LFSR value with the new one
+
+		CLR 	
+		ADD 	R3
+		CMP 	R0 				// if it == 0x00, need to handle space
+		BEQ 	HandleSpace		// need to determine if we are in preamble or in message
+		BNE 	SendToMem 		// if it's not a space, we don't need to HandleSpace, it will definitely get sent to mem
+
+	// If a space character is detected, we need to determine if it's in the pre-amble, or if a non-0x20 has occured
+	HandleSpace:
+		CLR 	
+		ADD 	R8 				// prepare to check if the store pointer is still at 0
+		CMP 	R0 				// compare with 0
+		BEQ 	Decrypt 		// back to the top!
+		BNE 	SendToMem 		// send to mem
+
+	SendToMem:
+		CLR 
+		ADD 	R13 			// R13 to be used as parity store. prepare parity to be shifted for comparison
+		LSL 	4'd7 				// shifts the parity to the MSB
+		ACM 	R13 			// update R10
+		CLR 	
+		ADD 	R9 				// load 0x7F
+		ADD 	R1 				// = 0b10000000
+		AND 	R7 				// retain MSB (parity) of original stored ASCII character
+		CMP 	R13 			// compare to computed parity of lower 7-bits
+		BNE 	SendError
+
+		// If the parity is consistent, send her home!
+		// the 4 lines below can be added to view the stored message in human readable format
+		//CLR
+		//ADD 	R3
+		//ADD 	R2
+		//ACM 	R3
+
+		STM 	R3 				// move R3 to store register
+		STR 	R8 				// store decrypted value in location addressed by store pointer
+		CLR 	
+		ADD 	R8 				// prepare to increment R8
+		ADD 	R1 				// increment
+		ACM 	R8 	 			// replace old value
+		CMP 	R8 				// guaruntee branch
+		BEQ  	Decrypt
+
+	SendSpace:
+		CLR 
+		//ADD 	R2 				// send 0x20 instead of 	
+		ACM 	R3 				// move to R3
+		STM 	R3 				// prepare for liftoff
+		STR 	R8				// send
+		CLR
+		ADD  	R8 				// still need to increment R8
+		ADD 	R1 				// increment
+		ACM 	R8				// update
+		CMP 	R8				// guaruntee branch
+		BEQ 	Decrypt
+
+
+	SendError:
+		CLR
+		ADD 	R9 				// load 0x7F
+		ADD 	R1 				// = 0b10000000
+		ACM 	R12 			// move to store register
+		STR 	R8 				// store at the store pointer address
+		CLR
+		ADD  	R8	 			// prepare to increment store pointer
+		ADD 	R1 				// increment
+		ACM 	R8 				// replace old value
+		CMP 	R8 				// guaruntee branch
+		BEQ  	Decrypt
+
+	Done:
+		CLR 
+		DUN

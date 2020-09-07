@@ -1,0 +1,158 @@
+// Get some useful constants into the register file
+LDA 	7'd52 			// load the value 0x0 into load register (R11)
+LDM 	R0 				// move this 0x0 into R0
+LDM 	R14 			// stack pointer will start at the beginning of the message
+LDA 	7'd53 			// load the value 0x1 into load register (R11)
+LDM 	R1 				// move 0x1 into R1
+LDA		7'd54			// load the value 0x20 into the load register (R11)
+LDM 	R2 				// move it into R2, so that it can be used even when R6 is some other ASCII character. 
+LDM 	R7				// move 0x20 value into R7 (because it will initially be used as the ASCII character)
+LDA		7'd61 			// load the number of space characters
+LDM 	R4 				// R4 will start as this, and we'll decrement downwards until we hit 0, then increment for the message
+LDA 	7'd62 			// load the LFSR sequence number
+LDM 	R5 				// move the value to R5
+LDA 	7'd63 			// load the LFSR starting state
+LDM 	R6 				// move this value into R6
+LDA 	7'd55 			// load the constant 64
+LDM 	R8 				// move to R8 to be used as the next place we will address
+LDA 	7'd57 			// load the constant 0b1111111 (127)
+LDM 	R9 				// move to R9
+CLR
+CMP 	R0 				// set the Z flag to known state so we can branch
+BEQ 	SpaceCharEnc 	// branch to SpaceCharEnc
+
+// Do while R4 != 0
+SpaceCharEnc:
+	CLR
+	ADD 	R7 				// add ASCII character register
+	SUB 	R2				// subtract 0x20 from this to get a 7-bit representation
+	XOR		R6 				// bitwise XOR with first LFSR state into accumulator
+	ACM 	R3 				// move the temporary value to R3
+	RXR 	R10				// calculate the reduction XOR of this value (to be used for parity)
+	CLR
+	ADD     R10 			// move to accumulator
+	LSL 	4'd7 			// shift it to bit 7 so we can add this to the value stored in R3
+	ADD 	R3 				// add the 7 bits stored in R3 to the parity
+	ACM 	R12				// move this final value to the store register (R12)
+	STR 	R8 				// store this value into memory address contained in the store pointer register (R8)
+	CLR
+	ADD 	R8 				// preparing to increment it
+	ADD 	R1				// increment the store pointer by 1
+	ACM 	R8				// update the old value
+	
+
+	// Compute and update the next LFSR state
+	CLR
+	ADD 	R6 				// add the initial state that is at DM64 into the accumulator
+	AND 	R9 				// mask off parity bit
+	AND 	R5 				// AND with the pattern type
+	RXR 	R10				// redux XOR and store in R10
+	CLR	
+	ADD 	R6 				// ADD R6, left shift will keep the lowest 7 bits
+	LSL 	4'd1			// shift it left by 1
+	ADD 	R10 			// add in the reduction XOR value
+	AND 	R9 				// mask out MSB
+	ACM 	R6 				// update the old LFSR value with the new one
+	
+	// Decrement number of space characters encrypted. If == 0, branch to message encryption
+	CLR
+	ADD 	R4 				// prepare to decrement R4
+	SUB 	R1 				// decrement the number of space characters left to go
+	ACM 	R4 				// update the old value
+	CMP 	R0 				// compare with 0x0
+	BNE 	SpaceCharEnc	// keep looping if it's not equal to 0
+	BEQ 	MessageEnc 		// if it is equal to zero, we're ready to start encrypting the message
+
+MessageEnc:
+	// Load next character from stack pointer
+	CLR
+	LDR 	R14 			// load value at the memory address contained in the stack pointer (R15)
+	LDM 	R7 				// place it in the ASCII character register
+	ADD 	R14				// prepare to increment stack pointer
+	ADD 	R1 				// increment
+	ACM 	R14				// update the old value
+
+	// Encrypt the character
+	CLR
+	ADD 	R7 				// add next character value
+	SUB 	R2 				// subtract 0x20
+	XOR 	R6 				// bitwise XOR with next LFSR state into the accumulator
+	ACM 	R3 				// move temporary 7-bit value to R3
+	RXR 	R10				// reduction XOR, keep in accumulator
+	CLR
+	ADD 	R10 			// move to accumulator
+	LSL 	4'd7 			// shift it to bit 7 so we can add this to the value stored in R3
+	ADD 	R3 				// add the 7 bits stored in R3 to the parity
+	ACM 	R12				// move this final value to the store register (R12)
+	STR 	R8				// store this value into memory address contained in the store pointer register (R8)
+	CLR
+	ADD 	R8				// preparing to increment it
+	ADD 	R1				// increment the store pointer by 1
+	ACM 	R8				// update the old value
+	
+	// Compute and update the next LFSR state
+	CLR
+	ADD 	R6 				// add the initial state that is at DM64 into the accumulator
+	AND 	R9 				// mask off parity bit
+	AND 	R5 				// AND with the pattern type
+	RXR 	R10				// redux XOR and store in R10
+	CLR	
+	ADD 	R6 				// ADD R6, left shift will keep the lowest 7 bits
+	LSL 	4'd1			// shift it left by 1
+	ADD 	R10 			// add in the reduction XOR value
+	AND 	R9 				// mask out MSB
+	ACM 	R6 				// update the old LFSR value with the new one
+
+	// If the stack pointer is at 52 (which contains 0x0), we can terminate
+	CLR
+	LDR 	R14				// stack pointer
+	ADD 	R11
+	CMP 	R0 				// compare with 0
+	BNE 	MessageEnc 		// keep looping if it's not equal to this
+	BEQ 	SendSpaces	 		// if it is equal to zero, we're ready to start encrypting the message
+
+SendSpaces:
+	CLR 	
+	ADD 	R9
+	ADD 	R1
+	CMP 	R8
+	BEQ 	Done
+
+	// Encrypt the character
+	CLR 	
+	// Don't need to add R2 then subtract R2. Just XOR 0 with next LFSR
+	XOR 	R6 				// bitwise XOR with next LFSR state into the accumulator
+	ACM 	R3 				// move temporary 7-bit value to R3
+	RXR 	R10				// reduction XOR, keep in accumulator
+	CLR
+	ADD 	R10 			// move to accumulator
+	LSL 	4'd7 			// shift it to bit 7 so we can add this to the value stored in R3
+	ADD 	R3 				// add the 7 bits stored in R3 to the parity
+	ACM 	R12				// move this final value to the store register (R12)
+	STR 	R8				// store this value into memory address contained in the store pointer register (R8)
+	CLR
+	ADD 	R8				// preparing to increment it
+	ADD 	R1				// increment the store pointer by 1
+	ACM 	R8				// update the old value
+
+	// Compute and update the next LFSR state
+	CLR
+	ADD 	R6 				// add the initial state that is at DM64 into the accumulator
+	AND 	R9 				// mask off parity bit
+	AND 	R5 				// AND with the pattern type
+	RXR 	R10				// redux XOR and store in R10
+	CLR	
+	ADD 	R6 				// ADD R6, left shift will keep the lowest 7 bits
+	LSL 	4'd1			// shift it left by 1
+	ADD 	R10 			// add in the reduction XOR value
+	AND 	R9 				// mask out MSB
+	ACM 	R6 				// update the old LFSR value with the new one
+
+	CLR
+	CMP 	R0
+	BEQ 	SendSpaces
+
+
+Done:
+	CLR
+	DUN
